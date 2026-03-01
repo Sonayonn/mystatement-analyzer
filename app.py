@@ -7,7 +7,7 @@ from thefuzz import process, fuzz
 # 1. Page Configuration & UI
 st.set_page_config(page_title="OPay Statement Analyzer", layout="wide")
 st.title("🟢 OPay Statement Analyzer")
-st.write("Upload your OPay PDF or Excel statement to instantly see your cash flow and transaction notes.")
+st.write("Upload your OPay Excel statement to instantly see your cash flow and transaction notes.")
 
 # ==========================================
 # THE OPAY-ONLY INTAKE MANIFOLD
@@ -75,7 +75,7 @@ def extract_from_excel(file_obj, filename):
     return df
 
 # ==========================================
-# THE OPAY Y-PIPE (Name & Narration Splitter)
+# 3. THE OPAY Y-PIPE (Name & Narration Splitter)
 # ==========================================
 def extract_opay_details(text):
     text = str(text).replace('\n', ' ')
