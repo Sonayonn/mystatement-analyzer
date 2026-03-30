@@ -9,11 +9,10 @@ import io
 # ==========================================
 # 1. PAGE CONFIGURATION & DYNAMIC CSS
 # ==========================================
-st.set_page_config(page_title="OPay Analyzer", layout="wide", page_icon="🟢")
+st.set_page_config(page_title="My Statement Analyzer", layout="wide", page_icon="🟢")
 
 st.markdown("""
 <style>
-    /* Use Streamlit's dynamic theme variables instead of hardcoded hex colors */
     .stApp { background-color: var(--secondary-background-color); }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
@@ -27,7 +26,6 @@ st.markdown("""
         margin-bottom: 0px; 
         padding-top: 1rem; 
     }
-    .opay-green { color: #00b578; }
     
     .fintech-card { 
         background-color: var(--background-color); 
@@ -57,7 +55,6 @@ st.markdown("""
         font-weight: 800; 
     }
     
-    /* Using rgba backgrounds so the delta chips look good in both Dark and Light mode */
     .delta-positive { color: #10b981; font-weight: 600; font-size: 0.95rem; margin-top: 8px; background: rgba(16, 185, 129, 0.1); padding: 4px 8px; border-radius: 6px; display: inline-block;}
     .delta-negative { color: #ef4444; font-weight: 600; font-size: 0.95rem; margin-top: 8px; background: rgba(239, 68, 68, 0.1); padding: 4px 8px; border-radius: 6px; display: inline-block;}
     
@@ -71,11 +68,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<div class='main-title'><span class='opay-green'>OPay</span> Statement Analyzer</div>", unsafe_allow_html=True)
-st.markdown("<p style='color: #64748b; font-size: 1.1rem;'>Instantly visualize your cash flow, transaction frequencies, and spending habits.</p>", unsafe_allow_html=True)
+st.markdown("<div class='main-title'><span style='color: #00b578;'>My</span> Statement Analyzer</div>", unsafe_allow_html=True)
+st.markdown("<p style='color: #64748b; font-size: 1.1rem;'>Instantly visualize cash flow, transaction frequencies, and spending habits to verify financial health.</p>", unsafe_allow_html=True)
+st.markdown("<p style='font-size: 0.95rem; color: #64748b; font-weight: 500;'>Supported Banks: <span style='color: #00b578; font-weight: 700;'>OPay</span> and <span style='color: #40196d; font-weight: 700;'>Kuda</span> for now.</p>", unsafe_allow_html=True)
 st.write("")
+
 # ==========================================
-# OPAY INTAKE MANIFOLD
+# INTAKE MANIFOLD (Optimized for OPay & Kuda)
 # ==========================================
 def extract_from_pdf(file_obj):
     records = []
@@ -100,49 +99,82 @@ def extract_from_pdf(file_obj):
     return pd.DataFrame(records)
 
 def extract_from_excel(file_obj, filename):
-    df_raw = pd.read_csv(file_obj, header=None) if filename.endswith('.csv') else pd.read_excel(file_obj, header=None)
-    header_idx = next((i for i, row in df_raw.iterrows() if re.search(r'(?i)(desc|narration|remark|particular)', " ".join([str(c).lower() for c in row.values]))), 0)
-    file_obj.seek(0)
-    df = pd.read_csv(file_obj, header=header_idx) if filename.endswith('.csv') else pd.read_excel(file_obj, header=header_idx)
+    # Determine file type and read purely to hunt for the actual headers
+    if filename.lower().endswith('.csv'):
+        df_raw = pd.read_csv(file_obj, header=None)
+    else:
+        df_raw = pd.read_excel(file_obj, header=None)
     
-    col_desc = next((c for c in df.columns if 'desc' in str(c).lower()), None)
-    col_out = next((c for c in df.columns if 'debit' in str(c).lower()), None)
-    col_in = next((c for c in df.columns if 'credit' in str(c).lower()), None)
+    header_idx = 0
+    for i, row in df_raw.iterrows():
+        row_str = " ".join([str(c).lower() for c in row.values])
+        # Kuda & OPay dynamic detection: row must have Date/Time AND Description/Money Out
+        if re.search(r'(?i)(date|time)', row_str) and re.search(r'(?i)(desc|narration|remark|particular|money out)', row_str):
+            header_idx = i
+            break
+            
+    file_obj.seek(0)
+    if filename.lower().endswith('.csv'):
+        df = pd.read_csv(file_obj, header=header_idx)
+    else:
+        df = pd.read_excel(file_obj, header=header_idx)
+    
+    # Identify standard columns flexibly
+    col_desc = next((c for c in df.columns if 'desc' in str(c).lower() or 'narration' in str(c).lower()), None)
+    col_out = next((c for c in df.columns if 'debit' in str(c).lower() or 'money out' in str(c).lower()), None)
+    col_in = next((c for c in df.columns if 'credit' in str(c).lower() or 'money in' in str(c).lower()), None)
     col_date = next((c for c in df.columns if 'date' in str(c).lower() or 'time' in str(c).lower()), None)
+    col_to_from = next((c for c in df.columns if 'to / from' in str(c).lower()), None)
     
     if not col_desc: return pd.DataFrame()
     df = df.dropna(subset=[col_desc])
-    df = df[~df[col_desc].str.contains('OWealth|Balance After', na=False, case=False)]
+    df = df[~df[col_desc].astype(str).str.contains('OWealth|Balance After', na=False, case=False)]
     
-    df['Date'] = pd.to_datetime(df[col_date], errors='coerce').dt.date if col_date else None
-    
+    if col_date:
+        df['Date'] = pd.to_datetime(df[col_date], errors='coerce').dt.date
+        df = df.dropna(subset=['Date']) # Drops Kuda's lingering summary rows
+    else:
+        df['Date'] = None
+        
     def clean_money(x):
         clean_str = re.sub(r'[^\d.]', '', str(x))
         return float(clean_str) if clean_str else 0.0
         
     df['Amount_Out'] = df[col_out].apply(clean_money) if col_out else 0.0
     df['Amount_In'] = df[col_in].apply(clean_money) if col_in else 0.0
-    df['Description'] = df[col_desc]
+    
+    # Kuda Data Fusion: Merge 'To / From' and 'Description' to retain sender names
+    if col_to_from:
+        to_from_col = df[col_to_from].fillna('').astype(str).replace('nan', '')
+        desc_col = df[col_desc].fillna('').astype(str).replace('nan', '')
+        df['Description'] = (to_from_col + " | " + desc_col)
+        df['Description'] = df['Description'].str.replace(r'^ \| | \| $', '', regex=True)
+    else:
+        df['Description'] = df[col_desc]
+        
     return df
 
 # ==========================================
-# OPAY Y-PIPE 
+# TRANSACTION Y-PIPE
 # ==========================================
-def extract_opay_details(text):
+def extract_transaction_details(text):
     text = str(text).replace('\n', ' ').strip()
     name, narration = "Other", "General"
 
-    if re.search(r'(Sporty|Betting)', text, re.IGNORECASE): return pd.Series(["Betting (SportyBet)", "Gaming/Betting"])
-    elif re.search(r'(Airtime)', text, re.IGNORECASE): return pd.Series(["Airtime Purchase", "Airtime"])
-    elif re.search(r'(Mobile Data|DataMin)', text, re.IGNORECASE): return pd.Series(["Mobile Data", "Internet Data"])
-    elif re.search(r'(Stamp Duty|Stamp_Duty)', text, re.IGNORECASE): return pd.Series(["FGN Stamp Duty", "Bank Charges"])
-    elif re.search(r'(Google Play)', text, re.IGNORECASE): return pd.Series(["Google Play", "App Subscription"])
+    # 1. Catch Kuda specific pattern: Name/Account/Bank | Note
+    m_kuda = re.search(r'^([^|]*?)/([^|]*?)/([^|]*?)\s*\|\s*(.*)', text)
     
+    # 2. Catch OPay explicit transfer pattern
     m_pipe = re.search(r'(?:Transfer to|Transfer from|POS Transfer-)\s*(.*?)\s*\|\s*(.*?)(?:\s*\|\s*(.*))?$', text, re.IGNORECASE)
     bank_regex = r'\s+(OPay|PalmPay|MONIE|Moniepoint|United|Wema|Access|Zenith|FBN|First Bank|UBA|Kuda|GTB|Guaranty|Sterling|Stanbic|Polaris|Union|Fidelity|Ecobank|Paystack)'
     m_no_pipe = re.search(r'(?:Transfer to|Transfer from|POS Transfer-)\s*(.*?)' + bank_regex + r'(.*)$', text, re.IGNORECASE)
     
-    if m_pipe:
+    if m_kuda:
+        name = m_kuda.group(1).strip().title()
+        bank = m_kuda.group(3).strip()
+        note = m_kuda.group(4).strip()
+        narration = note if note else bank
+    elif m_pipe:
         name = m_pipe.group(1).strip().title()
         bank_name = m_pipe.group(2).strip().title()
         note = m_pipe.group(3).strip().title() if m_pipe.group(3) else ""
@@ -152,6 +184,14 @@ def extract_opay_details(text):
         raw_note = m_no_pipe.group(3)
         narration = raw_note.strip().title() if raw_note and raw_note.strip() else "General"
     else:
+        # 3. If no explicit recipient is found, fallback to Fast Catch for generic utilities
+        if re.search(r'(Sporty|Betting|Bet9ja|1xBet)', text, re.IGNORECASE): return pd.Series(["Betting Platform", "Gaming/Betting"])
+        elif re.search(r'(Airtime)', text, re.IGNORECASE): return pd.Series(["Airtime Purchase", "Airtime"])
+        elif re.search(r'(Mobile Data|DataMin)', text, re.IGNORECASE): return pd.Series(["Mobile Data", "Internet Data"])
+        elif re.search(r'(Stamp Duty|Stamp_Duty)', text, re.IGNORECASE): return pd.Series(["FGN Stamp Duty", "Bank Charges"])
+        elif re.search(r'(Google Play)', text, re.IGNORECASE): return pd.Series(["Google Play", "App Subscription"])
+        
+        # 4. Fallback Generic cleaning
         m_bare = re.search(r'(?:Transfer to|Transfer from|POS Transfer-)\s*(.*)$', text, re.IGNORECASE)
         raw_name = m_bare.group(1) if m_bare else text
         clean_name = re.sub(r'(?i)\b\d{10,30}\b|\b\d{2} [A-Za-z]{3} \d{4}\b|\b\d{2}:\d{2}:\d{2}\b|\b\d{2}/\d{2}/\d{2,4}\b|\b\d+(?:[.,]\d{3})*[.,]\d{2}\b|--|\b(transfer|pos|successful|failed|mobile)\b', ' ', raw_name)
@@ -161,6 +201,7 @@ def extract_opay_details(text):
         if clean_name: name = clean_name
         narration = "General"
 
+    # Final cleanup of the resulting name and narration
     name = re.sub(r'(?i)^POS Transfer-', '', name).strip().rstrip('|').strip()
     if not name: name = "Other"
     
@@ -170,9 +211,9 @@ def extract_opay_details(text):
         narration = "General"
     narration = narration.strip(" |,-:") 
     if not narration: narration = "General"
-    # --------------------------------
     
     return pd.Series([name, narration])
+
 def resolve_identities(names, threshold=85):
     name_counts = names.value_counts()
     master_names, mapping = [], {}
@@ -215,7 +256,7 @@ if uploaded_file is not None:
         else: df = extract_from_excel(uploaded_file, uploaded_file.name)
             
         if not df.empty:
-            df[['Raw_Name', 'Narration']] = df['Description'].apply(extract_opay_details)
+            df[['Raw_Name', 'Narration']] = df['Description'].apply(extract_transaction_details)
             df['Clean_Name'] = resolve_identities(df['Raw_Name'])
             
             # Mathematical Aggregations
@@ -264,7 +305,6 @@ if uploaded_file is not None:
                 top_out = summary_out.head(7)
                 fig_out = px.pie(top_out, values='Amount_Out', names='Clean_Name', hole=0.5,
                                  color_discrete_sequence=px.colors.qualitative.Vivid)
-               
                 fig_out.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', 
                                       legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5))
                 fig_out.update_traces(textposition='inside', textinfo='percent', hovertemplate="<b>%{label}</b><br>₦%{value:,.2f}<extra></extra>")
@@ -315,11 +355,10 @@ if uploaded_file is not None:
             st.download_button(
                 label="📊 Download Full Excel Report",
                 data=excel_data,
-                file_name="OPay_Financial_Report.xlsx",
+                file_name="Financial_Report.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary"
             )
                 
         else:
-            st.error("Engine Stalled: Could not find valid OPay transactions.")
-
+            st.error("Engine Stalled: Could not find valid transactions.")
